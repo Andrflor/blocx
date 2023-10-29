@@ -10,18 +10,36 @@ export 'package:obx/obx.dart';
 
 typedef Response<T, E> = FutureOr<Result<T, E>>;
 
+typedef EmptyResult = Result<void, void>;
+typedef EmptyResponse = FutureOr<EmptyResult>;
+
 sealed class Result<T, E> {}
 
-abstract class RxStore {}
-
-class Success<T, E> extends Result<T, E> {
-  T data;
-  Success(this.data);
+abstract class RxAction<S extends RxStore> {
+  @nonVirtual
+  R dispatch<R>([S? store]) =>
+      (store ?? Dep.find<S>())._reducer._dispatch(this);
 }
 
-class Failure<T, E> extends Result<T, E> {
+abstract class Reducer<A extends RxAction<S>, S extends RxStore> {
+  final _handlers = <Type, Function(S store, A action)>{};
+  R _dispatch<T extends A, R>(T action) => _handlers[T]!(_store, action);
+  late final S _store;
+}
+
+abstract class RxStore {
+  late final Reducer _reducer = createReducer().._store = this;
+  Reducer createReducer();
+}
+
+final class Ok<T, E> extends Result<T, E> {
+  T data;
+  Ok(this.data);
+}
+
+final class Err<T, E> extends Result<T, E> {
   E err;
-  Failure(this.err);
+  Err(this.err);
 }
 
 class DuplicateEventHandlerException implements Exception {
@@ -57,7 +75,26 @@ abstract class Bloc<E extends Event, S extends Object> {
   late final _stateChannel = createState(initialState);
   S get state => _stateChannel.data;
 
-  List<Rx> get dependencies => <Rx>[];
+  final List<Rx> _dependencies = [];
+
+  @protected
+  @nonVirtual
+  void when<T>(T Function() callback, Function(T, StateEmitter<S>) handler) {
+    _dependencies.add(Rx.fuse(callback)
+      ..listen((value) => handler(value, _stateChannel.add)));
+  }
+
+  @mustCallSuper
+  void dispose() {
+    _eventChannel.close();
+    for (final e in _childEventChannels) {
+      e.close();
+    }
+    _stateChannel.close();
+    for (final e in _dependencies) {
+      e.close();
+    }
+  }
 
   @protected
   @nonVirtual
@@ -66,8 +103,8 @@ abstract class Bloc<E extends Event, S extends Object> {
     assert(() {
       if (_childEventChannels.any((e) => e is Rx<T>)) {
         throw DuplicateEventHandlerException(
-            'on<$E> was called multiple times. '
-            'Duplicate registration for event handler of type ${T.toString()}');
+            'on<$T> was called multiple times. '
+            'Duplicate registration for event handler of type $T');
       }
       return true;
     }());

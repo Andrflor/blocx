@@ -15,16 +15,19 @@ typedef EmptyResponse = FutureOr<EmptyResult>;
 
 sealed class Result<T, E> {}
 
-abstract class RxAction<S extends RxStore> {
+abstract class RxAction<S extends RxStore, R> {
   @nonVirtual
-  R dispatch<R>([S? store]) =>
-      (store ?? Dep.find<S>())._reducer._dispatch(this);
+  R dispatch([S? store]) => (store ?? Dep.find<S>())._reducer._dispatch(this);
 }
 
-abstract class Reducer<A extends RxAction<S>, S extends RxStore> {
-  final _handlers = <Type, Function(S store, A action)>{};
-  R _dispatch<T extends A, R>(T action) => _handlers[T]!(_store, action);
+abstract class Reducer<S extends RxStore> {
+  final _handlers = <Type, T Function<T>(S store, RxAction<S, T> action)>{};
+  R _dispatch<T extends RxAction<S, R>, R>(T action) =>
+      _handlers[T]!(_store, action);
   late final S _store;
+  on<T extends RxAction<S, R>, R>(R Function(S store, T action) callback) {
+    _handlers[T] = callback;
+  }
 }
 
 abstract class RxStore {

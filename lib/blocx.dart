@@ -15,23 +15,18 @@ typedef EmptyResponse = FutureOr<EmptyResult>;
 
 sealed class Result<T, E> {}
 
-abstract class RxAction<S extends RxStore, R> {
+abstract class RxAction<S extends RxStore, T> {
   @nonVirtual
-  R dispatch([S? store]) => (store ?? Dep.find<S>())._reducer._dispatch(this);
+  T dispatch([S? store]) =>
+      (store ??= locate<S>())._reducer.dispatch(this, store);
 }
 
 abstract class Reducer<S extends RxStore> {
-  final _handlers = <Type, T Function<T>(S store, RxAction<S, T> action)>{};
-  R _dispatch<T extends RxAction<S, R>, R>(T action) =>
-      _handlers[T]!(_store, action);
-  late final S _store;
-  on<T extends RxAction<S, R>, R>(R Function(S store, T action) callback) {
-    _handlers[T] = callback;
-  }
+  R dispatch<T extends RxAction<S, R>, R>(T action, S store);
 }
 
 abstract class RxStore {
-  late final Reducer _reducer = createReducer().._store = this;
+  late final Reducer _reducer = createReducer();
   Reducer createReducer();
 }
 
@@ -48,6 +43,16 @@ final class Err<T, E> extends Result<T, E> {
 class DuplicateEventHandlerException implements Exception {
   final String message;
   DuplicateEventHandlerException(this.message);
+}
+
+class UnreachableActionException implements Exception {
+  final RxAction action;
+
+  UnreachableActionException(this.action);
+
+  @override
+  String toString() =>
+      '$runtimeType(Recieved an illegal Action of type: ${action.runtimeType})';
 }
 
 typedef StateEmitter<S> = void Function(S);
@@ -68,6 +73,13 @@ class Event extends Notification {
   }
 }
 
+class Observer<T, S extends Object> {
+  T Function() observer;
+  Function(T, StateEmitter<S>) handler;
+
+  Observer(this.observer, this.handler);
+}
+
 abstract class Bloc<E extends Event, S extends Object> {
   Rx<E> createEvent() => Rx<E>.indistinct();
   late final _eventChannel = createEvent();
@@ -82,8 +94,8 @@ abstract class Bloc<E extends Event, S extends Object> {
 
   @protected
   @nonVirtual
-  void when<T>(T Function() callback, Function(T, StateEmitter<S>) handler) {
-    _dependencies.add(Rx.fuse(callback)
+  void watch<T>(T Function() observer, Function(T, StateEmitter<S>) handler) {
+    _dependencies.add(Rx.fuse(observer)
       ..listen((value) => handler(value, _stateChannel.add)));
   }
 
@@ -208,13 +220,47 @@ class InheritedStateElement<S extends Object> extends ComponentElement {
   Widget build() => (widget as Consumer<S>).builder(this, state!);
 }
 
-abstract class Dep {
-  static final Map<Type, dynamic Function()> _factories = {};
-  static final Map<Type, dynamic> _instances = {};
+class _TypeKey<T> {
+  final dynamic key;
+  Type get type => T;
 
-  static T find<T>() => _instances[T] ?? _factories[T]!();
-  static void lazy<T>(T Function() builder) => _factories[T] = builder;
-  static T remove<T>() => _instances.remove(T);
-  static T put<T>(T Function() builder) =>
-      _instances[T] = (_factories[T] = builder)();
+  _TypeKey([this.key]);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is _TypeKey && type == other.type && key == other.key;
+
+  @override
+  int get hashCode => key.hashCode;
 }
+
+class Factory<T> {
+  static final Map<_TypeKey, Factory> _factories = {};
+
+  T? _instance;
+  T Function()? _builder;
+
+  // Private internal constructor.
+  Factory._internal(this._builder);
+
+  T Function() get builder =>
+      _builder ?? (throw StateError('No builder provided for type $T'));
+
+  T find() => _instance ??= builder();
+  factory Factory._({T Function()? builder, dynamic tag}) =>
+      switch ((Factory._factories[_TypeKey<T>(tag)], builder)) {
+        (null, _) => Factory._factories[_TypeKey<T>(tag)] =
+            Factory<T>._internal(builder),
+        (final Factory<T> factory, null) => factory,
+        (final Factory<T> factory, T Function() builder) => factory
+          .._builder = builder,
+        _ => throw "Unreachable condition",
+      };
+}
+
+T inject<T>(T Function() builder, [dynamic tag]) =>
+    Factory<T>._(builder: builder, tag: tag).find();
+Factory<T> lazy<T>(T Function() builder, [dynamic tag]) =>
+    Factory<T>._(builder: builder, tag: tag);
+T locate<T>([dynamic tag]) => Factory<T>._(tag: tag).find();

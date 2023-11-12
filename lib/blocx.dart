@@ -3,6 +3,7 @@ library blocx;
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:obx/obx.dart';
 
@@ -80,6 +81,10 @@ class Observer<T, S extends Object> {
   Observer(this.observer, this.handler);
 }
 
+class _Helper<T> {
+  _Helper();
+}
+
 abstract class Bloc<E extends Event, S extends Object> {
   Rx<E> createEvent() => Rx<E>.indistinct();
   late final _eventChannel = createEvent();
@@ -94,8 +99,14 @@ abstract class Bloc<E extends Event, S extends Object> {
 
   @protected
   @nonVirtual
-  void watch<T>(T Function() observer, Function(T, StateEmitter<S>) handler) {
-    _dependencies.add(Rx.fuse(observer)
+  void watch<T>(T Function() observer, Function(T, StateEmitter<S>) handler,
+      {Equality? eq}) {
+    _dependencies.add(Rx.fuse(observer,
+        eq: eq ??
+            switch (_Helper<T>()) {
+              _Helper<Iterable>() || _Helper<Map>() => const NeverEquality(),
+              _ => const Equality(),
+            })
       ..listen((value) => handler(value, _stateChannel.add)));
   }
 
